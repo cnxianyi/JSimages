@@ -22,10 +22,10 @@ async function handleUploadRequest(request, domain, R2_BUCKET, maxSize, AUTH) {
   try {
     // 校验Authorization头
     if (AUTH) {
-      const authHeader = request.headers.get("Authorization");
+  const authHeader = request.headers.get("Authorization");
       if (!authHeader) {
         return new Response(JSON.stringify({ error: "缺少Authorization头" }), {
-          status: 401,
+        status: 401,
           headers: { "Content-Type": "application/json" },
         });
       }
@@ -39,6 +39,7 @@ async function handleUploadRequest(request, domain, R2_BUCKET, maxSize, AUTH) {
 
     const formData = await request.formData();
     const file = formData.get("file");
+    const folderPath = formData.get("path") || ""; // 获取文件夹路径
     if (!file) throw new Error("缺少文件");
 
     if (file.size > maxSize) {
@@ -50,11 +51,20 @@ async function handleUploadRequest(request, domain, R2_BUCKET, maxSize, AUTH) {
       );
     }
 
-    // 生成文件名+时间戳+后缀的键名
+    // 生成文件名+时间戳+后缀的键名，支持文件夹路径
     const timestamp = Date.now();
     const fileExtension = file.name.split(".").pop();
     const fileName = file.name.replace(/\.[^/.]+$/, ""); // 移除扩展名
-    const r2Key = `${fileName}_${timestamp}.${fileExtension}`;
+    
+    // 处理文件夹路径
+    let r2Key;
+    if (folderPath && folderPath.trim()) {
+      // 清理路径，移除开头和结尾的斜杠，确保路径格式正确
+      const cleanPath = folderPath.trim().replace(/^\/+|\/+$/g, '');
+      r2Key = `${cleanPath}/${fileName}_${timestamp}.${fileExtension}`;
+    } else {
+      r2Key = `${fileName}_${timestamp}.${fileExtension}`;
+    }
 
     // 上传到R2
     await R2_BUCKET.put(r2Key, file.stream(), {
@@ -84,9 +94,11 @@ async function handleImageRequest(request, R2_BUCKET) {
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) return cachedResponse;
 
-  // 解析文件名 - 现在R2键名包含完整文件名
-  const urlParts = requestedUrl.split("/");
-  const r2Key = urlParts[urlParts.length - 1];
+  // 解析文件路径 - 支持文件夹嵌套
+  const url = new URL(requestedUrl);
+  const pathname = url.pathname;
+  // 移除开头的斜杠，获取相对于域名的路径
+  const r2Key = pathname.startsWith('/') ? pathname.substring(1) : pathname;
 
   // 直接从R2获取文件
   const object = await R2_BUCKET.get(r2Key);
@@ -104,7 +116,7 @@ async function handleImageRequest(request, R2_BUCKET) {
     switch (fileExtension) {
       case "jpg":
       case "jpeg":
-        contentType = "image/jpeg";
+    contentType = "image/jpeg";
         break;
       case "png":
         contentType = "image/png";
